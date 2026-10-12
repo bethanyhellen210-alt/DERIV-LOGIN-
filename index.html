@@ -70,7 +70,7 @@ function analyse(){
      qualified=true;title='BUY '+type.toUpperCase()+' '+b;
      reason='Sequence confirmed: low-frequency setup digit '+previous+' ('+pct[previous].toFixed(1)+'%) was followed by digit '+last+' on the '+(type==='over'?'above-barrier':'below-barrier')+' side ('+pct[last].toFixed(1)+'%). Setup threshold: '+threshold+'%.';
      confidence=Math.min(75,50+Math.min(15,Math.max(0,threshold-pct[previous])*2)+Math.min(10,Math.max(0,pct[last]-threshold)));
-     signature=title+':'+previous+'>'+last+':'+ticks[ticks.length-1].epoch;
+     signature=title+':'+previous+'>'+last;
    }else if(!setupDigits.length){
      reason='No digit on the '+(type==='over'?'under-barrier':'over-barrier')+' side is below '+threshold+'%. WAIT.';
    }else{
@@ -82,7 +82,7 @@ function analyse(){
      qualified=true;title='BUY DIFFERS '+target;
      reason='Prediction digit '+target+' has low observed frequency ('+rate.toFixed(1)+'%, below '+threshold+'%) and just appeared. Differs wins only if the next contract result is not '+target+'.';
      confidence=Math.min(75,50+Math.max(0,threshold-rate)*2);
-     signature=title+':'+ticks[ticks.length-1].epoch;
+     signature=title;
    }else if(type==='matches'&&rate<threshold&&last===target){
      qualified=true;title='BUY MATCHES '+target;
      reason='Prediction digit '+target+' has low observed frequency ('+rate.toFixed(1)+'%, below '+threshold+'%) and just appeared. Matches wins only if the next contract result is '+target+'.';
@@ -99,7 +99,7 @@ function analyse(){
    if(Math.abs(edge)>=6&&stable){
      qualified=true;title='BUY '+chosen;
      reason=chosen+' is '+rate.toFixed(1)+'% of the selected window versus '+(type==='even'?'ODD':'EVEN')+' at '+opposite.toFixed(1)+'%; recent-window reading '+shortRate.toFixed(1)+'%. Historical frequency is descriptive, not predictive.';
-     confidence=Math.min(65,50+Math.abs(edge)*1.2);signature=title+':'+Math.round(rate)+':'+ticks[ticks.length-1].epoch;
+     confidence=Math.min(65,50+Math.abs(edge)*1.2);signature=title+':'+Math.round(rate);
    }else{
      reason='EVEN '+even.toFixed(1)+'% · ODD '+odd.toFixed(1)+'%. No stable frequency edge; WAIT.';
    }
