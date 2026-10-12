@@ -46,7 +46,6 @@ $('logout').onclick=()=>{stopAnalysis();$('accessKey').value='';show('landing');
 // Try the documented public WebSocket endpoint first, then legacy host variants.
 const DERIV_APP_ID='1089';
 const DERIV_WS_URLS=[
- 'wss://ws.binaryws.com/websockets/v3',
  'wss://ws.derivws.com/websockets/v3?app_id='+DERIV_APP_ID,
  'wss://ws.binaryws.com/websockets/v3?app_id='+DERIV_APP_ID
 ];
@@ -82,6 +81,8 @@ function loadMarkets(){
     if(!list.length)throw Error('Deriv returned no active markets');
     $('market').innerHTML='';
     for(const s of list){marketNames[s.symbol]=s.display_name||s.symbol;const o=document.createElement('option');o.value=s.symbol;o.textContent=(s.display_name||s.symbol)+' ('+s.symbol+')';$('market').append(o);}
+    // Prefer Volatility 100 for a predictable default; otherwise use the first returned market.
+    if([...$('market').options].some(o=>o.value==='R_100')) $('market').value='R_100';
     activeDerivUrl=url;
     marketRetryDelay=2000;
     if(marketRetryTimer){clearTimeout(marketRetryTimer);marketRetryTimer=null;}
@@ -153,7 +154,15 @@ async function startAnalysis(){
     const fixed=q.toFixed(Math.max(0,Math.min(8,precision))),digit=Number(fixed.slice(-1));
     if(!Number.isInteger(digit)||digit<0||digit>9)return;
     ticks.push({digit,epoch:m.tick.epoch});if(ticks.length>1000)ticks.shift();
-    $('lastDigit').textContent=digit;setConnection('LIVE · '+(marketNames[selectedSymbol]||selectedSymbol));
+    $('lastDigit').textContent=digit;
+    // Keep the public landing preview visibly live too, even before access-key login.
+    const previewDigit=$('previewDigits').children[digit];
+    if(previewDigit){for(const el of $('previewDigits').children)el.style.background='transparent';previewDigit.style.background='#d4af37';previewDigit.style.color='#080909';}
+    const previewTitle=document.querySelector('.preview .signal h2');
+    const previewStatus=document.querySelector('.preview .signal .muted');
+    if(previewTitle)previewTitle.textContent='LIVE TICK · '+digit;
+    if(previewStatus)previewStatus.textContent='Connected to '+(marketNames[selectedSymbol]||selectedSymbol)+' · real-time Deriv quote';
+    setConnection('LIVE · '+(marketNames[selectedSymbol]||selectedSymbol));
     renderFrequency();analyse();
    }
   };
@@ -270,8 +279,9 @@ updateContractFields();
 $('window').onchange=()=>{renderFrequency();if(ticks.length)analyse();};
 $('threshold').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
 $('barrier').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
-// Warm up the public Deriv market feed as soon as the website opens; login is not required for public symbols.
-loadMarkets().catch(()=>scheduleMarketRetry());
+// Connect to public Deriv markets and start a real tick stream as soon as the website opens.
+// This is public market data only: no access key, account token, or trade permission is used.
+loadMarkets().then(()=>{if($('market').value)startAnalysis();}).catch(()=>scheduleMarketRetry());
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!marketLoading)loadMarkets().catch(()=>scheduleMarketRetry());});
 window.addEventListener('online',()=>{if(!marketLoading)loadMarkets().catch(()=>scheduleMarketRetry());});
 for(let d=0;d<10;d++)$('previewDigits').children[d].style.borderColor=d===8?'#d4af37':'#44443d';
