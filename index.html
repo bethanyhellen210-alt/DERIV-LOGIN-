@@ -39,7 +39,7 @@ let socket=null,running=false,ticks=[],timer=null,signalUntil=0,marketNames={},l
 const setConnection=(s)=>$('connection').textContent='● '+s;
 function resetSignal(text,reason){$('signalText').textContent=text;$('signalReason').textContent=reason;$('confidence').textContent='—';$('countdown').textContent='—';signalUntil=0;}
 async function verifyKey(key){const r=await fetch('/api/verify-key',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({accessKey:key})});if(!r.ok)throw new Error('Access key is invalid or server configuration is missing.');return r.json();}
-$('loginForm').onsubmit=async e=>{e.preventDefault();$('loginError').textContent='';$('loginSubmit').disabled=true;$('loginSubmit').textContent='VERIFYING…';try{await verifyKey($('accessKey').value);show('app');loadMarkets().catch(err=>setConnection('Market feed unavailable · '+(err.message||'retry')));}catch(err){$('loginError').textContent=err.message||'Could not verify access.';}finally{$('loginSubmit').disabled=false;$('loginSubmit').textContent='VERIFY ACCESS';}};
+$('loginForm').onsubmit=async e=>{e.preventDefault();$('loginError').textContent='';$('loginSubmit').disabled=true;$('loginSubmit').textContent='VERIFYING…';try{await verifyKey($('accessKey').value);show('app');loadMarkets().catch(err=>setConnection('Deriv feed not ready · retrying automatically'));}catch(err){$('loginError').textContent=err.message||'Could not verify access.';}finally{$('loginSubmit').disabled=false;$('loginSubmit').textContent='VERIFY ACCESS';}};
 $('logout').onclick=()=>{stopAnalysis();$('accessKey').value='';show('landing');};
 async function loadMarkets(){setConnection('Connecting to Deriv live markets…');let ws;try{ws=new WebSocket('wss://ws.binaryws.com/websockets/v3');await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Deriv connection timed out')),10000);ws.onopen=()=>{clearTimeout(timeout);resolve();};ws.onerror=()=>{clearTimeout(timeout);reject(Error('Deriv WebSocket failed to open. Check network or endpoint availability'));};});const symbols=await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Deriv did not return market symbols')),10000);ws.onmessage=ev=>{const m=JSON.parse(ev.data);if(m.error){clearTimeout(timeout);reject(Error(m.error.message));return;}if(m.msg_type==='active_symbols'){clearTimeout(timeout);resolve(m.active_symbols||[]);}};ws.send(JSON.stringify({active_symbols:'brief',product_type:'basic'}));});const list=symbols.filter(x=>x.exchange_is_open!==0).sort((a,b)=>a.display_name.localeCompare(b.display_name));$('market').innerHTML='';for(const s of list){marketNames[s.symbol]=s.display_name;const o=document.createElement('option');o.value=s.symbol;o.textContent=s.display_name+' ('+s.symbol+')';$('market').append(o);}setConnection('Live market list loaded · '+list.length+' symbols');try{ws.close();}catch{}if(!list.length)throw Error('No active markets returned');}catch(err){try{ws&&ws.close()}catch{}setConnection((err.message||'Connection failed')+' · tap Start to retry');throw err;}}
 $('startStop').onclick=()=>running?stopAnalysis():startAnalysis();
@@ -79,16 +79,16 @@ function analyse(){
    const target=b,rate=pct[target];
    if(type==='differ'&&rate<threshold&&last===target){
      qualified=true;title='BUY DIFFERS '+target;
-     reason='Prediction digit '+target+' has low observed frequency ('+rate.toFixed(1)+'%, below '+threshold+'%) and just appeared. Differs wins only if the next contract result is not '+target+'.';
+     reason='AUTO-PREDICTED DIGIT '+target+' · observed frequency '+rate.toFixed(1)+'%. It just appeared. Differs wins if the next result is not '+target+'.';
      confidence=Math.min(75,50+Math.max(0,threshold-rate)*2);
      signature=title;
    }else if(type==='matches'&&rate<threshold&&last===target){
      qualified=true;title='BUY MATCHES '+target;
-     reason='Prediction digit '+target+' has low observed frequency ('+rate.toFixed(1)+'%, below '+threshold+'%) and just appeared. Matches wins only if the next contract result is '+target+'.';
+     reason='AUTO-PREDICTED DIGIT '+target+' · observed frequency '+rate.toFixed(1)+'%. It just appeared. Matches wins if the next result is '+target+'.';
      confidence=Math.min(70,45+Math.max(0,threshold-rate)*2);
      signature=title+':'+ticks[ticks.length-1].epoch;
    }else{
-     reason='Target digit '+target+' frequency is '+rate.toFixed(1)+'%. '+(rate<threshold?'Waiting for digit '+target+' to appear on a live tick.':'Target frequency is not below '+threshold+'%; WAIT.');
+     reason='AUTO-PREDICTED DIGIT '+target+' · frequency '+rate.toFixed(1)+'%. '+(rate<threshold?'Waiting for the predicted digit to appear on a live tick.':'No low-frequency setup yet; WAIT.');
    }
  }else{
    const even=[0,2,4,6,8].reduce((a,d)=>a+counts[d],0)/n*100,odd=100-even;
@@ -126,6 +126,8 @@ updateContractFields();
 $('window').onchange=()=>{renderFrequency();if(ticks.length)analyse();};
 $('threshold').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
 $('barrier').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
+// Warm up the public Deriv market feed as soon as the website opens; login is not required for public symbols.
+loadMarkets().catch(()=>{setTimeout(()=>loadMarkets().catch(()=>{}),2500);});
 for(let d=0;d<10;d++)$('previewDigits').children[d].style.borderColor=d===8?'#d4af37':'#44443d';
 </script>
 </body></html>
