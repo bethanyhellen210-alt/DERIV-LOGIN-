@@ -48,7 +48,7 @@ const DERIV_WS_URLS=[
  'wss://ws.binaryws.com/websockets/v3?app_id='+DERIV_APP_ID
 ];
 let activeDerivUrl=DERIV_WS_URLS[0];
-function scheduleMarketRetry(){if(marketRetryTimer||document.hidden)return;const delay=marketRetryDelay;marketRetryDelay=Math.min(15000,marketRetryDelay*2);marketRetryTimer=setTimeout(()=>{marketRetryTimer=null;loadMarkets().catch(()=>scheduleMarketRetry());},delay);}
+function scheduleMarketRetry(){if(marketRetryTimer||document.hidden)return;const delay=marketRetryDelay;marketRetryDelay=Math.min(15000,marketRetryDelay*2);marketRetryTimer=setTimeout(()=>{marketRetryTimer=null;loadMarkets().then(()=>{if(!app.classList.contains('hidden')&&!running&&$('market').value)startAnalysis();}).catch(()=>scheduleMarketRetry());},delay);}
 function loadMarkets(){
  if(marketLoadPromise)return marketLoadPromise;
  marketLoading=true;
@@ -97,9 +97,11 @@ function loadMarkets(){
  return marketLoadPromise;
 }
 $('startStop').onclick=()=>running?stopAnalysis():startAnalysis();
+$('market').addEventListener('change',()=>{if(running){setConnection('Switching market feed…');startAnalysis();}});
 function stopAnalysis(){running=false;clearTickTimers();if(socket){try{socket.onclose=null;socket.close()}catch{}socket=null;}$('startStop').textContent='▶ START ANALYSIS';setConnection('Disconnected');resetSignal('ANALYSIS STOPPED','Press Start Analysis to reconnect.');}
-let tickConnectTimer=null,tickReconnectTimer=null,reconnectAttempt=0;
-function clearTickTimers(){if(tickConnectTimer){clearTimeout(tickConnectTimer);tickConnectTimer=null;}if(tickReconnectTimer){clearTimeout(tickReconnectTimer);tickReconnectTimer=null;}}
+let tickConnectTimer=null,tickReconnectTimer=null,tickWatchdogTimer=null,pingTimer=null,reconnectAttempt=0;
+function clearTickTimers(){if(tickConnectTimer){clearTimeout(tickConnectTimer);tickConnectTimer=null;}if(tickReconnectTimer){clearTimeout(tickReconnectTimer);tickReconnectTimer=null;}if(tickWatchdogTimer){clearTimeout(tickWatchdogTimer);tickWatchdogTimer=null;}if(pingTimer){clearInterval(pingTimer);pingTimer=null;}}
+function armTickWatchdog(ws){if(tickWatchdogTimer)clearTimeout(tickWatchdogTimer);tickWatchdogTimer=setTimeout(()=>{if(running&&socket===ws){setConnection('No fresh ticks · reconnecting…');try{ws.close();}catch{} }},20000);}
 async function startAnalysis(){
  if(running&&socket&&socket.readyState===WebSocket.OPEN)return;
  if(!$('market').value){
@@ -126,8 +128,11 @@ async function startAnalysis(){
    connected=true;reconnectAttempt=0;
    if(tickConnectTimer){clearTimeout(tickConnectTimer);tickConnectTimer=null;}
    setConnection('Connected · subscribing to '+(marketNames[selectedSymbol]||selectedSymbol));
-   try{currentSocket.send(JSON.stringify({ticks:selectedSymbol,subscribe:1}));}
-   catch{setConnection('Subscription failed · reconnecting…');currentSocket.close();}
+   try{
+    currentSocket.send(JSON.stringify({ticks:selectedSymbol,subscribe:1}));
+    pingTimer=setInterval(()=>{if(running&&socket===currentSocket&&currentSocket.readyState===WebSocket.OPEN){try{currentSocket.send(JSON.stringify({ping:1}));}catch{try{currentSocket.close();}catch{}}}},30000);
+    armTickWatchdog(currentSocket);
+   }catch{setConnection('Subscription failed · reconnecting…');currentSocket.close();}
   };
   currentSocket.onmessage=ev=>{
    if(!running||socket!==currentSocket)return;
@@ -139,6 +144,7 @@ async function startAnalysis(){
     return;
    }
    if(m.msg_type==='tick'&&m.tick){
+    armTickWatchdog(currentSocket);
     const q=Number(m.tick.quote),precision=Number(m.tick.pip_size??2);
     if(!Number.isFinite(q))return;
     const fixed=q.toFixed(Math.max(0,Math.min(8,precision))),digit=Number(fixed.slice(-1));
@@ -151,7 +157,7 @@ async function startAnalysis(){
   currentSocket.onerror=()=>{if(running&&socket===currentSocket)setConnection('Deriv connection interrupted · retrying…');try{currentSocket.close();}catch{}};
   currentSocket.onclose=()=>{
    if(socket===currentSocket)socket=null;
-   if(tickConnectTimer){clearTimeout(tickConnectTimer);tickConnectTimer=null;}
+   clearTickTimers();
    if(!running)return;
    setConnection('Disconnected · reconnecting automatically…');
    resetSignal('RECONNECTING…','The live feed disconnected. Reconnecting automatically.');
