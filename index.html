@@ -96,8 +96,78 @@ function loadMarkets(){
  return marketLoadPromise;
 }
 $('startStop').onclick=()=>running?stopAnalysis():startAnalysis();
-function stopAnalysis(){running=false;if(socket){try{socket.onclose=null;socket.close()}catch{}socket=null;}$('startStop').textContent='▶ START ANALYSIS';setConnection('Disconnected');resetSignal('ANALYSIS STOPPED','Press Start Analysis to reconnect.');}
-async function startAnalysis(){if(!$('market').value){setConnection('Loading markets…');try{await loadMarkets();}catch{return;}if(!$('market').value){setConnection('No market selected');return;}}const selectedSymbol=$('market').value;stopAnalysis();running=true;$('startStop').textContent='■ STOP ANALYSIS';ticks=[];signalSignature='';resetSignal('CONNECTING…','Opening Deriv public live tick stream.');setConnection('Connecting to live market…');try{socket=new WebSocket(activeDerivUrl||DERIV_WS_URLS[0]);socket.onopen=()=>{if(!running)return;setConnection('Connected · subscribing to live ticks');socket.send(JSON.stringify({ticks:selectedSymbol,subscribe:1}));};socket.onmessage=ev=>{const m=JSON.parse(ev.data);if(m.error){setConnection('Deriv: '+m.error.message);resetSignal('CONNECTION ERROR',m.error.message);return;}if(m.msg_type==='tick'&&m.tick){const q=Number(m.tick.quote),precision=Number(m.tick.pip_size??2),fixed=q.toFixed(Math.max(0,Math.min(8,precision))),digit=Number(fixed.slice(-1));if(!Number.isInteger(digit)||digit<0||digit>9)return;ticks.push({digit,epoch:m.tick.epoch});if(ticks.length>1000)ticks.shift();$('lastDigit').textContent=digit;setConnection('LIVE · '+(marketNames[selectedSymbol]||selectedSymbol));renderFrequency();analyse();}};socket.onerror=()=>{setConnection('Live feed interrupted · reconnecting…');};socket.onclose=()=>{if(running){setConnection('Live feed interrupted · reconnecting…');running=false;$('startStop').textContent='▶ START ANALYSIS';setTimeout(()=>{if(!$('app').classList.contains('hidden'))startAnalysis();},2500);}};}catch(err){setConnection(err.message||'Connection failed');running=false;$('startStop').textContent='▶ START ANALYSIS';}}
+function stopAnalysis(){running=false;clearTickTimers();if(socket){try{socket.onclose=null;socket.close()}catch{}socket=null;}$('startStop').textContent='▶ START ANALYSIS';setConnection('Disconnected');resetSignal('ANALYSIS STOPPED','Press Start Analysis to reconnect.');}
+let tickConnectTimer=null,tickReconnectTimer=null,reconnectAttempt=0;
+function clearTickTimers(){if(tickConnectTimer){clearTimeout(tickConnectTimer);tickConnectTimer=null;}if(tickReconnectTimer){clearTimeout(tickReconnectTimer);tickReconnectTimer=null;}}
+async function startAnalysis(){
+ if(running&&socket&&socket.readyState===WebSocket.OPEN)return;
+ if(!$('market').value){
+  setConnection('Loading live markets…');
+  try{await loadMarkets();}catch{resetSignal('MARKET UNAVAILABLE','Deriv has not returned market symbols yet. The app will retry automatically.');return;}
+  if(!$('market').value){setConnection('No market selected');return;}
+ }
+ const selectedSymbol=$('market').value;
+ if(socket){try{socket.onclose=null;socket.close();}catch{}socket=null;}
+ clearTickTimers();running=true;$('startStop').textContent='■ STOP ANALYSIS';
+ ticks=[];signalSignature='';resetSignal('CONNECTING…','Opening Deriv live tick stream.');setConnection('Connecting to Deriv live ticks…');
+ let connected=false;
+ try{
+  socket=new WebSocket(activeDerivUrl||DERIV_WS_URLS[0]);
+  const currentSocket=socket;
+  tickConnectTimer=setTimeout(()=>{
+   if(running&&socket===currentSocket&&!connected){
+    setConnection('Connection timed out · retrying…');
+    try{currentSocket.close();}catch{}
+   }
+  },12000);
+  currentSocket.onopen=()=>{
+   if(!running||socket!==currentSocket)return;
+   connected=true;reconnectAttempt=0;
+   if(tickConnectTimer){clearTimeout(tickConnectTimer);tickConnectTimer=null;}
+   setConnection('Connected · subscribing to '+(marketNames[selectedSymbol]||selectedSymbol));
+   try{currentSocket.send(JSON.stringify({ticks:selectedSymbol,subscribe:1}));}
+   catch{setConnection('Subscription failed · reconnecting…');currentSocket.close();}
+  };
+  currentSocket.onmessage=ev=>{
+   if(!running||socket!==currentSocket)return;
+   let m;try{m=JSON.parse(ev.data);}catch{return;}
+   if(m.error){
+    setConnection('Deriv request error · retrying…');
+    resetSignal('FEED ERROR',m.error.message||'Deriv rejected the tick subscription.');
+    try{currentSocket.close();}catch{}
+    return;
+   }
+   if(m.msg_type==='tick'&&m.tick){
+    const q=Number(m.tick.quote),precision=Number(m.tick.pip_size??2);
+    if(!Number.isFinite(q))return;
+    const fixed=q.toFixed(Math.max(0,Math.min(8,precision))),digit=Number(fixed.slice(-1));
+    if(!Number.isInteger(digit)||digit<0||digit>9)return;
+    ticks.push({digit,epoch:m.tick.epoch});if(ticks.length>1000)ticks.shift();
+    $('lastDigit').textContent=digit;setConnection('LIVE · '+(marketNames[selectedSymbol]||selectedSymbol));
+    renderFrequency();analyse();
+   }
+  };
+  currentSocket.onerror=()=>{if(running&&socket===currentSocket)setConnection('Deriv connection interrupted · retrying…');try{currentSocket.close();}catch{}};
+  currentSocket.onclose=()=>{
+   if(socket===currentSocket)socket=null;
+   if(tickConnectTimer){clearTimeout(tickConnectTimer);tickConnectTimer=null;}
+   if(!running)return;
+   setConnection('Disconnected · reconnecting automatically…');
+   resetSignal('RECONNECTING…','The live feed disconnected. Reconnecting automatically.');
+   const delay=Math.min(15000,1000*Math.pow(2,Math.min(reconnectAttempt++,4)));
+   tickReconnectTimer=setTimeout(()=>{
+    tickReconnectTimer=null;
+    if(running&&!$('app').classList.contains('hidden'))startAnalysis();
+   },delay);
+  };
+ }catch(err){
+  running=false;$('startStop').textContent='▶ START ANALYSIS';
+  setConnection('Could not open Deriv feed · retrying');
+  resetSignal('CONNECTION FAILED',err&&err.message?err.message:'Could not open a WebSocket connection.');
+  const delay=Math.min(15000,1000*Math.pow(2,Math.min(reconnectAttempt++,4)));
+  tickReconnectTimer=setTimeout(()=>{tickReconnectTimer=null;if(!running&&!$('app').classList.contains('hidden'))startAnalysis();},delay);
+ }
+}
 function renderFrequency(){const n=Math.min(ticks.length,Number($('window').value)),sample=ticks.slice(-n),counts=Array(10).fill(0);sample.forEach(x=>counts[x.digit]++);$('tickCount').textContent=sample.length+' ticks collected';$('frequencies').innerHTML='';counts.forEach((c,d)=>{const pct=sample.length?c/sample.length*100:0;const el=document.createElement('div');el.className='freq';el.innerHTML='<span>Digit '+d+'</span><strong>'+pct.toFixed(1)+'%</strong><div class="bar"><i style="width:'+Math.min(100,pct*10)+'%"></i></div>';$('frequencies').append(el);});}
 function analyse(){
  const n=Math.min(ticks.length,Number($('window').value));
