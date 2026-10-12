@@ -35,6 +35,7 @@ function show(which){landing.classList.toggle('hidden',which!=='landing');login.
 $('navLogin').onclick=$('openLogin').onclick=()=>show('login');$('backLanding').onclick=()=>show('landing');
 $('howBtn').onclick=()=>document.querySelector('.features').scrollIntoView({behavior:'smooth'});
 for(let d=0;d<10;d++){const e=document.createElement('span');e.className='digit';e.textContent=d;$('previewDigits').append(e);const o=document.createElement('option');o.value=d;o.textContent=String(d);$('barrier').append(o);}
+function updateBarrierOptions(){const type=$('contract').value;const previousValue=$('barrier').value;const min=type==='under'?1:0;const max=type==='over'?8:9;$('barrier').innerHTML='';for(let d=min;d<=max;d++){const o=document.createElement('option');o.value=d;o.textContent=String(d);$('barrier').append(o);}if(previousValue!==''&&Number(previousValue)>=min&&Number(previousValue)<=max)$('barrier').value=previousValue;}
 let socket=null,running=false,ticks=[],signalUntil=0,marketNames={},signalSignature='',marketRetryTimer=null,marketRetryDelay=2000,marketLoading=false,marketLoadPromise=null;
 const setConnection=(s)=>$('connection').textContent='● '+s;
 function resetSignal(text,reason){$('signalText').textContent=text;$('signalReason').textContent=reason;$('confidence').textContent='—';$('countdown').textContent='—';signalUntil=0;}
@@ -182,24 +183,23 @@ function analyse(){
  let title='WAIT',reason='No setup confirmed. Continue analysing.',confidence=null,qualified=false,signature='';
  const recent=ticks.slice(-Math.min(20,ticks.length));
  if(type==='over'||type==='under'){
-   // Mirror the requested setup: for OVER b, an under-barrier digit must first be below
-   // the frequency threshold, then a high-frequency digit above b triggers OVER b.
-   // For UNDER b, reverse the sides.
+   // Deriv digit contracts: OVER b wins when the final digit is greater than b;
+   // UNDER b wins when the final digit is less than b. The low-frequency threshold
+   // qualifies the setup digits on the losing side; it does not need to qualify the entry digit.
    const setupDigits=Array.from({length:10},(_,d)=>d).filter(d=>
-     (type==='over'?d<b:d>b) && pct[d]<threshold);
+     (type==='over'?d<=b:d>=b) && pct[d]<threshold);
    const entrySide=type==='over'?last>b:last<b;
-   const entryFrequencyHigh=pct[last]>=threshold;
    const previousWasSetup=previous!==undefined && setupDigits.includes(previous);
    const setupRecent=recent.slice(0,-1).some(x=>setupDigits.includes(x.digit));
-   if(setupDigits.length && entrySide && entryFrequencyHigh && previousWasSetup){
+   if(setupDigits.length && entrySide && previousWasSetup){
      qualified=true;title='BUY '+type.toUpperCase()+' '+b;
-     reason='Sequence confirmed: low-frequency setup digit '+previous+' ('+pct[previous].toFixed(1)+'%) was followed by digit '+last+' on the '+(type==='over'?'above-barrier':'below-barrier')+' side ('+pct[last].toFixed(1)+'%). Setup threshold: '+threshold+'%.';
-     confidence=Math.min(75,50+Math.min(15,Math.max(0,threshold-pct[previous])*2)+Math.min(10,Math.max(0,pct[last]-threshold)));
-     signature=title+':'+previous+'>'+last;
+     reason='Deriv '+type.toUpperCase()+' '+b+' setup: low-frequency digit '+previous+' ('+pct[previous].toFixed(1)+'%, below '+threshold+'%) was followed by '+last+', which is on the winning side of barrier '+b+'.';
+     confidence=Math.min(70,50+Math.min(15,Math.max(0,threshold-pct[previous])*2));
+     signature=title+':'+previous+'>'+last+':'+ticks[ticks.length-1].epoch;
    }else if(!setupDigits.length){
-     reason='No digit on the '+(type==='over'?'under-barrier':'over-barrier')+' side is below '+threshold+'%. WAIT.';
+     reason='No losing-side digit is below the LOW DIGIT THRESHOLD of '+threshold+'% in the selected window. WAIT.';
    }else{
-     reason='Setup digits below '+threshold+'%: '+setupDigits.join(', ')+'. '+(setupRecent?'Recent setup observed; waiting for a qualifying '+(type==='over'?'digit above '+b:'digit below '+b)+' with frequency at or above '+threshold+'%.':'Waiting for a low-frequency '+(type==='over'?'digit below '+b:'digit above '+b)+' followed by a qualifying entry digit.');
+     reason='LOW DIGIT THRESHOLD: '+threshold+'%. Qualifying setup digits: '+setupDigits.join(', ')+'. '+(setupRecent?'A setup digit appeared recently; waiting for the next tick on the Deriv winning side ('+(type==='over'?'above ':'below ')+b+').':'Waiting for a low-frequency losing-side digit followed immediately by a winning-side tick.');
    }
  }else if(type==='differ'||type==='matches'){
    const target=predictedDigit,rate=pct[target];
@@ -255,7 +255,8 @@ function updateContractFields(){
   $('barrierLabel').textContent='BARRIER / TARGET DIGIT';
   thresholdField.querySelector('label').textContent='LOW DIGIT THRESHOLD';
 }
-$('contract').onchange=()=>{updateContractFields();signalSignature='';resetSignal('WAITING FOR SETUP','Strategy changed. Continue analysing live ticks.');};
+$('contract').onchange=()=>{updateBarrierOptions();updateContractFields();signalSignature='';resetSignal('WAITING FOR SETUP','Strategy changed. Continue analysing live ticks.');if(ticks.length)analyse();};
+updateBarrierOptions();
 updateContractFields();
 $('window').onchange=()=>{renderFrequency();if(ticks.length)analyse();};
 $('threshold').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
