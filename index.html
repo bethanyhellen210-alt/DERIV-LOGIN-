@@ -41,50 +41,63 @@ function resetSignal(text,reason){$('signalText').textContent=text;$('signalReas
 async function verifyKey(key){const r=await fetch('/api/verify-key',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({accessKey:key})});if(!r.ok)throw new Error('Access key is invalid or server configuration is missing.');return r.json();}
 $('loginForm').onsubmit=async e=>{e.preventDefault();$('loginError').textContent='';$('loginSubmit').disabled=true;$('loginSubmit').textContent='VERIFYING…';try{await verifyKey($('accessKey').value);show('app');loadMarkets().then(()=>startAnalysis()).catch(()=>{setConnection('Reconnecting to Deriv automatically…');scheduleMarketRetry();});}catch(err){$('loginError').textContent=err.message||'Could not verify access.';}finally{$('loginSubmit').disabled=false;$('loginSubmit').textContent='VERIFY ACCESS';}};
 $('logout').onclick=()=>{stopAnalysis();$('accessKey').value='';show('landing');};
-const DERIV_WS_URL='wss://ws.derivws.com/websockets/v3?app_id=1089';
+const DERIV_APP_ID='1089';
+const DERIV_WS_URLS=[
+ 'wss://ws.derivws.com/websockets/v3?app_id='+DERIV_APP_ID,
+ 'wss://ws.binaryws.com/websockets/v3?app_id='+DERIV_APP_ID
+];
+let activeDerivUrl=DERIV_WS_URLS[0];
 function scheduleMarketRetry(){if(marketRetryTimer||document.hidden)return;const delay=marketRetryDelay;marketRetryDelay=Math.min(15000,marketRetryDelay*2);marketRetryTimer=setTimeout(()=>{marketRetryTimer=null;loadMarkets().catch(()=>scheduleMarketRetry());},delay);}
 function loadMarkets(){
  if(marketLoadPromise)return marketLoadPromise;
  marketLoading=true;
- setConnection('Connecting to Deriv automatically…');
+ setConnection('Connecting to Deriv live markets…');
  marketLoadPromise=(async()=>{
-  let ws;
-  try{
-   ws=new WebSocket(DERIV_WS_URL);
-   await new Promise((resolve,reject)=>{
-    const timeout=setTimeout(()=>reject(Error('Deriv connection timed out')),10000);
-    ws.onopen=()=>{clearTimeout(timeout);resolve();};
-    ws.onerror=()=>{clearTimeout(timeout);reject(Error('Deriv WebSocket failed to open'));};
-   });
-   const symbols=await new Promise((resolve,reject)=>{
-    const timeout=setTimeout(()=>reject(Error('Deriv did not return market symbols')),10000);
-    ws.onmessage=ev=>{
-     let m;try{m=JSON.parse(ev.data);}catch{return;}
-     if(m.error){clearTimeout(timeout);reject(Error(m.error.message));return;}
-     if(m.msg_type==='active_symbols'){clearTimeout(timeout);resolve(m.active_symbols||[]);}
-    };
-    ws.send(JSON.stringify({active_symbols:'brief',product_type:'basic'}));
-   });
-   const list=symbols.filter(x=>x.exchange_is_open!==0).sort((a,b)=>a.display_name.localeCompare(b.display_name));
-   $('market').innerHTML='';
-   for(const s of list){marketNames[s.symbol]=s.display_name;const o=document.createElement('option');o.value=s.symbol;o.textContent=s.display_name+' ('+s.symbol+')';$('market').append(o);}
-   if(!list.length)throw Error('No active markets returned');
-   marketRetryDelay=2000;
-   if(marketRetryTimer){clearTimeout(marketRetryTimer);marketRetryTimer=null;}
-   setConnection('Connected to Deriv · '+list.length+' markets ready');
-   try{ws.close();}catch{}
-  }catch(err){
-   try{ws&&ws.close();}catch{}
-   setConnection('Reconnecting to Deriv automatically…');
-   scheduleMarketRetry();
-   throw err;
-  }finally{marketLoading=false;marketLoadPromise=null;}
- })();
+  let lastError=null;
+  for(const url of DERIV_WS_URLS){
+   let ws=null, timer=null;
+   try{
+    const symbols=await new Promise((resolve,reject)=>{
+     let settled=false;
+     const finish=(fn,value)=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);fn(value);};
+     timer=setTimeout(()=>{try{ws&&ws.close();}catch{}finish(reject,Error('Connection timed out'));},12000);
+     try{ws=new WebSocket(url);}catch(e){finish(reject,e);return;}
+     ws.onopen=()=>{
+      try{ws.send(JSON.stringify({active_symbols:'brief'}));}
+      catch(e){finish(reject,e);}
+     };
+     ws.onmessage=ev=>{
+      let m;try{m=JSON.parse(ev.data);}catch{return;}
+      if(m.error){finish(reject,Error(m.error.message||'Deriv rejected the market request'));return;}
+      if(m.msg_type==='active_symbols')finish(resolve,m.active_symbols||[]);
+     };
+     ws.onerror=()=>finish(reject,Error('WebSocket connection failed'));
+     ws.onclose=()=>{if(!settled)finish(reject,Error('Deriv closed before returning market symbols'));};
+    });
+    const list=symbols.filter(x=>x&&x.symbol&&x.exchange_is_open!==0).sort((a,b)=>(a.display_name||a.symbol).localeCompare(b.display_name||b.symbol));
+    if(!list.length)throw Error('Deriv returned no active markets');
+    $('market').innerHTML='';
+    for(const s of list){marketNames[s.symbol]=s.display_name||s.symbol;const o=document.createElement('option');o.value=s.symbol;o.textContent=(s.display_name||s.symbol)+' ('+s.symbol+')';$('market').append(o);}
+    activeDerivUrl=url;
+    marketRetryDelay=2000;
+    if(marketRetryTimer){clearTimeout(marketRetryTimer);marketRetryTimer=null;}
+    setConnection('Deriv live data connected · '+list.length+' markets');
+    try{ws&&ws.close();}catch{}
+    return list;
+   }catch(err){
+    lastError=err;
+    try{if(timer)clearTimeout(timer);ws&&ws.close();}catch{}
+   }
+  }
+  setConnection('Deriv unavailable · retrying automatically');
+  scheduleMarketRetry();
+  throw lastError||Error('Could not connect to Deriv');
+ })().finally(()=>{marketLoading=false;marketLoadPromise=null;});
  return marketLoadPromise;
 }
 $('startStop').onclick=()=>running?stopAnalysis():startAnalysis();
 function stopAnalysis(){running=false;if(socket){try{socket.onclose=null;socket.close()}catch{}socket=null;}$('startStop').textContent='▶ START ANALYSIS';setConnection('Disconnected');resetSignal('ANALYSIS STOPPED','Press Start Analysis to reconnect.');}
-async function startAnalysis(){if(!$('market').value){setConnection('Loading markets…');try{await loadMarkets();}catch{return;}if(!$('market').value){setConnection('No market selected');return;}}const selectedSymbol=$('market').value;stopAnalysis();running=true;$('startStop').textContent='■ STOP ANALYSIS';ticks=[];signalSignature='';resetSignal('CONNECTING…','Opening Deriv public live tick stream.');setConnection('Connecting to live market…');try{socket=new WebSocket(DERIV_WS_URL);socket.onopen=()=>{if(!running)return;setConnection('Connected · subscribing to live ticks');socket.send(JSON.stringify({ticks:selectedSymbol,subscribe:1}));};socket.onmessage=ev=>{const m=JSON.parse(ev.data);if(m.error){setConnection('Deriv: '+m.error.message);resetSignal('CONNECTION ERROR',m.error.message);return;}if(m.msg_type==='tick'&&m.tick){const q=Number(m.tick.quote),precision=Number(m.tick.pip_size??2),fixed=q.toFixed(Math.max(0,Math.min(8,precision))),digit=Number(fixed.slice(-1));if(!Number.isInteger(digit)||digit<0||digit>9)return;ticks.push({digit,epoch:m.tick.epoch});if(ticks.length>1000)ticks.shift();$('lastDigit').textContent=digit;setConnection('LIVE · '+(marketNames[selectedSymbol]||selectedSymbol));renderFrequency();analyse();}};socket.onerror=()=>{setConnection('Live feed interrupted · reconnecting…');};socket.onclose=()=>{if(running){setConnection('Live feed interrupted · reconnecting…');running=false;$('startStop').textContent='▶ START ANALYSIS';setTimeout(()=>{if(!$('app').classList.contains('hidden'))startAnalysis();},2500);}};}catch(err){setConnection(err.message||'Connection failed');running=false;$('startStop').textContent='▶ START ANALYSIS';}}
+async function startAnalysis(){if(!$('market').value){setConnection('Loading markets…');try{await loadMarkets();}catch{return;}if(!$('market').value){setConnection('No market selected');return;}}const selectedSymbol=$('market').value;stopAnalysis();running=true;$('startStop').textContent='■ STOP ANALYSIS';ticks=[];signalSignature='';resetSignal('CONNECTING…','Opening Deriv public live tick stream.');setConnection('Connecting to live market…');try{socket=new WebSocket(activeDerivUrl||DERIV_WS_URLS[0]);socket.onopen=()=>{if(!running)return;setConnection('Connected · subscribing to live ticks');socket.send(JSON.stringify({ticks:selectedSymbol,subscribe:1}));};socket.onmessage=ev=>{const m=JSON.parse(ev.data);if(m.error){setConnection('Deriv: '+m.error.message);resetSignal('CONNECTION ERROR',m.error.message);return;}if(m.msg_type==='tick'&&m.tick){const q=Number(m.tick.quote),precision=Number(m.tick.pip_size??2),fixed=q.toFixed(Math.max(0,Math.min(8,precision))),digit=Number(fixed.slice(-1));if(!Number.isInteger(digit)||digit<0||digit>9)return;ticks.push({digit,epoch:m.tick.epoch});if(ticks.length>1000)ticks.shift();$('lastDigit').textContent=digit;setConnection('LIVE · '+(marketNames[selectedSymbol]||selectedSymbol));renderFrequency();analyse();}};socket.onerror=()=>{setConnection('Live feed interrupted · reconnecting…');};socket.onclose=()=>{if(running){setConnection('Live feed interrupted · reconnecting…');running=false;$('startStop').textContent='▶ START ANALYSIS';setTimeout(()=>{if(!$('app').classList.contains('hidden'))startAnalysis();},2500);}};}catch(err){setConnection(err.message||'Connection failed');running=false;$('startStop').textContent='▶ START ANALYSIS';}}
 function renderFrequency(){const n=Math.min(ticks.length,Number($('window').value)),sample=ticks.slice(-n),counts=Array(10).fill(0);sample.forEach(x=>counts[x.digit]++);$('tickCount').textContent=sample.length+' ticks collected';$('frequencies').innerHTML='';counts.forEach((c,d)=>{const pct=sample.length?c/sample.length*100:0;const el=document.createElement('div');el.className='freq';el.innerHTML='<span>Digit '+d+'</span><strong>'+pct.toFixed(1)+'%</strong><div class="bar"><i style="width:'+Math.min(100,pct*10)+'%"></i></div>';$('frequencies').append(el);});}
 function analyse(){
  const n=Math.min(ticks.length,Number($('window').value));
@@ -172,7 +185,8 @@ $('threshold').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
 $('barrier').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
 // Warm up the public Deriv market feed as soon as the website opens; login is not required for public symbols.
 loadMarkets().catch(()=>scheduleMarketRetry());
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!marketLoading&&(!$('market').options.length||!$('market').value))loadMarkets().catch(()=>scheduleMarketRetry());});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!marketLoading)loadMarkets().catch(()=>scheduleMarketRetry());});
+window.addEventListener('online',()=>{if(!marketLoading)loadMarkets().catch(()=>scheduleMarketRetry());});
 for(let d=0;d<10;d++)$('previewDigits').children[d].style.borderColor=d===8?'#d4af37':'#44443d';
 </script>
 </body></html>
