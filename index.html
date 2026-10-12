@@ -19,9 +19,9 @@
 <div class="panel"><div class="row"><strong>MARKET & STRATEGY</strong><span id="connection" class="muted">● Disconnected</span></div><div class="controls" style="margin-top:16px">
 <div class="field wide"><label for="market">MARKET SELECT</label><select id="market"><option value="">Load markets first</option></select></div>
 <div class="field"><label for="contract">CONTRACT TYPE</label><select id="contract"><option value="over">1 · Over</option><option value="under">2 · Under</option><option value="even">3 · Even</option><option value="odd">4 · Odd</option><option value="differ">5 · Differs</option><option value="matches">6 · Matches</option></select></div>
-<div class="field"><label for="barrier">BARRIER / TARGET DIGIT</label><select id="barrier"></select></div>
+<div class="field hidden" id="barrierField"><label id="barrierLabel" for="barrier">BARRIER</label><select id="barrier"></select></div>
 <div class="field"><label for="window">FREQUENCY WINDOW</label><select id="window"><option value="100">100 ticks</option><option value="500">500 ticks</option><option value="1000">1,000 ticks</option></select></div>
-<div class="field"><label for="threshold">LOW DIGIT THRESHOLD</label><select id="threshold"><option value="10.4">Below 10.4%</option><option value="10.5">Below 10.5%</option></select></div>
+<div class="field hidden" id="thresholdField"><label for="threshold">LOW DIGIT THRESHOLD</label><select id="threshold"><option value="10.4">Below 10.4%</option><option value="10.5">Below 10.5%</option></select></div>
 
 <div class="field wide"><button id="startStop" class="btn primary" style="width:100%">▶ START ANALYSIS</button></div>
 </div></div>
@@ -113,7 +113,16 @@ function analyse(){
  }
 }
 expiryInterval=setInterval(()=>{if(signalUntil&&Date.now()>=signalUntil){signalUntil=0;signalSignature='';$('signalText').textContent='SIGNAL EXPIRED';$('signalReason').textContent='The 30-second signal window has expired. Wait for a new setup.';$('confidence').textContent='—';$('countdown').textContent='0s';}else if(signalUntil){$('countdown').textContent=Math.max(0,Math.ceil((signalUntil-Date.now())/1000))+'s';}},250);
-$('contract').onchange=()=>{signalSignature='';resetSignal('WAITING FOR SETUP','Strategy changed. Continue analysing live ticks.');};
+function updateContractFields(){
+  const type=$('contract').value;
+  const isOverUnder=type==='over'||type==='under';
+  const needsTarget=type==='matches'||type==='differ';
+  $('thresholdField').classList.toggle('hidden',!isOverUnder);
+  $('barrierField').classList.toggle('hidden',!(isOverUnder||needsTarget));
+  $('barrierLabel').textContent=isOverUnder?'BARRIER':'TARGET DIGIT';
+}
+$('contract').onchange=()=>{updateContractFields();signalSignature='';resetSignal('WAITING FOR SETUP','Strategy changed. Continue analysing live ticks.');};
+updateContractFields();
 $('window').onchange=()=>{renderFrequency();if(ticks.length)analyse();};
 $('threshold').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
 $('barrier').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
