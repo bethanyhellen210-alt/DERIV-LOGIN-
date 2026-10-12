@@ -32,6 +32,9 @@
 const $=id=>document.getElementById(id);
 const landing=$('landing'),login=$('login'),app=$('app');
 function show(which){landing.classList.toggle('hidden',which!=='landing');login.classList.toggle('hidden',which!=='login');app.classList.toggle('hidden',which!=='app');}
+// Open directly into the live dashboard. No access-key landing screen is required.
+show('app');
+$('navLogin').classList.add('hidden');
 $('navLogin').onclick=$('openLogin').onclick=()=>show('login');$('backLanding').onclick=()=>show('landing');
 $('howBtn').onclick=()=>document.querySelector('.features').scrollIntoView({behavior:'smooth'});
 for(let d=0;d<10;d++){const e=document.createElement('span');e.className='digit';e.textContent=d;$('previewDigits').append(e);const o=document.createElement('option');o.value=d;o.textContent=String(d);$('barrier').append(o);}
@@ -114,7 +117,15 @@ function loadMarkets(){
  return marketLoadPromise;
 }
 $('startStop').onclick=()=>running?stopAnalysis():startAnalysis();
-$('market').addEventListener('change',()=>{if(running){setConnection('Switching market feed…');startAnalysis();}});
+$('market').addEventListener('change',()=>{
+ if(!$('market').value)return;
+ setConnection('Switching market feed…');
+ // Close the previous subscription before starting the newly selected market.
+ if(socket){try{socket.onclose=null;socket.close();}catch{}socket=null;}
+ clearTickTimers();
+ running=false;
+ startAnalysis();
+});
 function stopAnalysis(){running=false;clearTickTimers();if(socket){try{socket.onclose=null;socket.close()}catch{}socket=null;}$('startStop').textContent='▶ START ANALYSIS';setConnection('Disconnected');resetSignal('ANALYSIS STOPPED','Press Start Analysis to reconnect.');}
 let tickConnectTimer=null,tickReconnectTimer=null,tickWatchdogTimer=null,pingTimer=null,reconnectAttempt=0;
 function clearTickTimers(){if(tickConnectTimer){clearTimeout(tickConnectTimer);tickConnectTimer=null;}if(tickReconnectTimer){clearTimeout(tickReconnectTimer);tickReconnectTimer=null;}if(tickWatchdogTimer){clearTimeout(tickWatchdogTimer);tickWatchdogTimer=null;}if(pingTimer){clearInterval(pingTimer);pingTimer=null;}}
