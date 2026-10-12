@@ -35,7 +35,7 @@ function show(which){landing.classList.toggle('hidden',which!=='landing');login.
 $('navLogin').onclick=$('openLogin').onclick=()=>show('login');$('backLanding').onclick=()=>show('landing');
 $('howBtn').onclick=()=>document.querySelector('.features').scrollIntoView({behavior:'smooth'});
 for(let d=0;d<10;d++){const e=document.createElement('span');e.className='digit';e.textContent=d;$('previewDigits').append(e);const o=document.createElement('option');o.value=d;o.textContent=String(d);$('barrier').append(o);}
-let socket=null,running=false,ticks=[],signalUntil=0,marketNames={},signalSignature='',marketRetryTimer=null,marketRetryDelay=2000,marketLoading=false;
+let socket=null,running=false,ticks=[],signalUntil=0,marketNames={},signalSignature='',marketRetryTimer=null,marketRetryDelay=2000,marketLoading=false,marketLoadPromise=null;
 const setConnection=(s)=>$('connection').textContent='● '+s;
 function resetSignal(text,reason){$('signalText').textContent=text;$('signalReason').textContent=reason;$('confidence').textContent='—';$('countdown').textContent='—';signalUntil=0;}
 async function verifyKey(key){const r=await fetch('/api/verify-key',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({accessKey:key})});if(!r.ok)throw new Error('Access key is invalid or server configuration is missing.');return r.json();}
@@ -43,7 +43,45 @@ $('loginForm').onsubmit=async e=>{e.preventDefault();$('loginError').textContent
 $('logout').onclick=()=>{stopAnalysis();$('accessKey').value='';show('landing');};
 const DERIV_WS_URL='wss://ws.derivws.com/websockets/v3?app_id=1089';
 function scheduleMarketRetry(){if(marketRetryTimer||document.hidden)return;const delay=marketRetryDelay;marketRetryDelay=Math.min(15000,marketRetryDelay*2);marketRetryTimer=setTimeout(()=>{marketRetryTimer=null;loadMarkets().catch(()=>scheduleMarketRetry());},delay);}
-async function loadMarkets(){if(marketLoading) return;marketLoading=true;setConnection('Connecting to Deriv automatically…');let ws;try{ws=new WebSocket(DERIV_WS_URL);await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Deriv connection timed out')),10000);ws.onopen=()=>{clearTimeout(timeout);resolve();};ws.onerror=()=>{clearTimeout(timeout);reject(Error('Deriv WebSocket failed to open. Check network or endpoint availability'));};});const symbols=await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Deriv did not return market symbols')),10000);ws.onmessage=ev=>{const m=JSON.parse(ev.data);if(m.error){clearTimeout(timeout);reject(Error(m.error.message));return;}if(m.msg_type==='active_symbols'){clearTimeout(timeout);resolve(m.active_symbols||[]);}};ws.send(JSON.stringify({active_symbols:'brief',product_type:'basic'}));});const list=symbols.filter(x=>x.exchange_is_open!==0).sort((a,b)=>a.display_name.localeCompare(b.display_name));$('market').innerHTML='';for(const s of list){marketNames[s.symbol]=s.display_name;const o=document.createElement('option');o.value=s.symbol;o.textContent=s.display_name+' ('+s.symbol+')';$('market').append(o);}if(!list.length)throw Error('No active markets returned');marketRetryDelay=2000;if(marketRetryTimer){clearTimeout(marketRetryTimer);marketRetryTimer=null;}setConnection('Connected to Deriv · '+list.length+' markets ready');try{ws.close();}catch{}}catch(err){try{ws&&ws.close()}catch{}setConnection('Reconnecting to Deriv automatically…');scheduleMarketRetry();throw err;}finally{marketLoading=false;}}
+function loadMarkets(){
+ if(marketLoadPromise)return marketLoadPromise;
+ marketLoading=true;
+ setConnection('Connecting to Deriv automatically…');
+ marketLoadPromise=(async()=>{
+  let ws;
+  try{
+   ws=new WebSocket(DERIV_WS_URL);
+   await new Promise((resolve,reject)=>{
+    const timeout=setTimeout(()=>reject(Error('Deriv connection timed out')),10000);
+    ws.onopen=()=>{clearTimeout(timeout);resolve();};
+    ws.onerror=()=>{clearTimeout(timeout);reject(Error('Deriv WebSocket failed to open'));};
+   });
+   const symbols=await new Promise((resolve,reject)=>{
+    const timeout=setTimeout(()=>reject(Error('Deriv did not return market symbols')),10000);
+    ws.onmessage=ev=>{
+     let m;try{m=JSON.parse(ev.data);}catch{return;}
+     if(m.error){clearTimeout(timeout);reject(Error(m.error.message));return;}
+     if(m.msg_type==='active_symbols'){clearTimeout(timeout);resolve(m.active_symbols||[]);}
+    };
+    ws.send(JSON.stringify({active_symbols:'brief',product_type:'basic'}));
+   });
+   const list=symbols.filter(x=>x.exchange_is_open!==0).sort((a,b)=>a.display_name.localeCompare(b.display_name));
+   $('market').innerHTML='';
+   for(const s of list){marketNames[s.symbol]=s.display_name;const o=document.createElement('option');o.value=s.symbol;o.textContent=s.display_name+' ('+s.symbol+')';$('market').append(o);}
+   if(!list.length)throw Error('No active markets returned');
+   marketRetryDelay=2000;
+   if(marketRetryTimer){clearTimeout(marketRetryTimer);marketRetryTimer=null;}
+   setConnection('Connected to Deriv · '+list.length+' markets ready');
+   try{ws.close();}catch{}
+  }catch(err){
+   try{ws&&ws.close();}catch{}
+   setConnection('Reconnecting to Deriv automatically…');
+   scheduleMarketRetry();
+   throw err;
+  }finally{marketLoading=false;marketLoadPromise=null;}
+ })();
+ return marketLoadPromise;
+}
 $('startStop').onclick=()=>running?stopAnalysis():startAnalysis();
 function stopAnalysis(){running=false;if(socket){try{socket.onclose=null;socket.close()}catch{}socket=null;}$('startStop').textContent='▶ START ANALYSIS';setConnection('Disconnected');resetSignal('ANALYSIS STOPPED','Press Start Analysis to reconnect.');}
 async function startAnalysis(){if(!$('market').value){setConnection('Loading markets…');try{await loadMarkets();}catch{return;}if(!$('market').value){setConnection('No market selected');return;}}const selectedSymbol=$('market').value;stopAnalysis();running=true;$('startStop').textContent='■ STOP ANALYSIS';ticks=[];signalSignature='';resetSignal('CONNECTING…','Opening Deriv public live tick stream.');setConnection('Connecting to live market…');try{socket=new WebSocket(DERIV_WS_URL);socket.onopen=()=>{if(!running)return;setConnection('Connected · subscribing to live ticks');socket.send(JSON.stringify({ticks:selectedSymbol,subscribe:1}));};socket.onmessage=ev=>{const m=JSON.parse(ev.data);if(m.error){setConnection('Deriv: '+m.error.message);resetSignal('CONNECTION ERROR',m.error.message);return;}if(m.msg_type==='tick'&&m.tick){const q=Number(m.tick.quote),precision=Number(m.tick.pip_size??2),fixed=q.toFixed(Math.max(0,Math.min(8,precision))),digit=Number(fixed.slice(-1));if(!Number.isInteger(digit)||digit<0||digit>9)return;ticks.push({digit,epoch:m.tick.epoch});if(ticks.length>1000)ticks.shift();$('lastDigit').textContent=digit;setConnection('LIVE · '+(marketNames[selectedSymbol]||selectedSymbol));renderFrequency();analyse();}};socket.onerror=()=>{setConnection('Live feed interrupted · reconnecting…');};socket.onclose=()=>{if(running){setConnection('Live feed interrupted · reconnecting…');running=false;$('startStop').textContent='▶ START ANALYSIS';setTimeout(()=>{if(!$('app').classList.contains('hidden'))startAnalysis();},2500);}};}catch(err){setConnection(err.message||'Connection failed');running=false;$('startStop').textContent='▶ START ANALYSIS';}}
