@@ -46,11 +46,24 @@ $('logout').onclick=()=>{stopAnalysis();$('accessKey').value='';show('landing');
 // Try the documented public WebSocket endpoint first, then legacy host variants.
 const DERIV_APP_ID='1089';
 const DERIV_WS_URLS=[
+ // Official public market-data endpoint: no authentication or App ID required.
+ 'wss://ws.binaryws.com/websockets/v3',
  'wss://ws.derivws.com/websockets/v3?app_id='+DERIV_APP_ID,
  'wss://ws.binaryws.com/websockets/v3?app_id='+DERIV_APP_ID
 ];
 let activeDerivUrl=DERIV_WS_URLS[0];
-function scheduleMarketRetry(){if(marketRetryTimer||document.hidden)return;const delay=marketRetryDelay;marketRetryDelay=Math.min(15000,marketRetryDelay*2);marketRetryTimer=setTimeout(()=>{marketRetryTimer=null;loadMarkets().then(()=>{if(!app.classList.contains('hidden')&&!running&&$('market').value)startAnalysis();}).catch(()=>scheduleMarketRetry());},delay);}
+function scheduleMarketRetry(){
+ if(marketRetryTimer||document.hidden)return;
+ const delay=marketRetryDelay;
+ marketRetryDelay=Math.min(15000,marketRetryDelay*2);
+ marketRetryTimer=setTimeout(()=>{
+  marketRetryTimer=null;
+  loadMarkets().then(()=>{
+   // Recovery must start the tick stream even when the visitor is still on the landing page.
+   if($('market').value&&!running)startAnalysis();
+  }).catch(()=>scheduleMarketRetry());
+ },delay);
+}
 function loadMarkets(){
  if(marketLoadPromise)return marketLoadPromise;
  marketLoading=true;
@@ -282,8 +295,22 @@ $('barrier').onchange=()=>{signalSignature='';if(ticks.length)analyse();};
 // Connect to public Deriv markets and start a real tick stream as soon as the website opens.
 // This is public market data only: no access key, account token, or trade permission is used.
 loadMarkets().then(()=>{if($('market').value)startAnalysis();}).catch(()=>scheduleMarketRetry());
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!marketLoading)loadMarkets().catch(()=>scheduleMarketRetry());});
-window.addEventListener('online',()=>{if(!marketLoading)loadMarkets().catch(()=>scheduleMarketRetry());});
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden||marketLoading)return;
+ if(!marketNames[$('market').value]||!$('market').value){
+  loadMarkets().then(()=>{if($('market').value&&!running)startAnalysis();}).catch(()=>scheduleMarketRetry());
+ }else if(!running){
+  startAnalysis();
+ }
+});
+window.addEventListener('online',()=>{
+ if(marketLoading)return;
+ if(!marketNames[$('market').value]||!$('market').value){
+  loadMarkets().then(()=>{if($('market').value&&!running)startAnalysis();}).catch(()=>scheduleMarketRetry());
+ }else if(!running){
+  startAnalysis();
+ }
+});
 for(let d=0;d<10;d++)$('previewDigits').children[d].style.borderColor=d===8?'#d4af37':'#44443d';
 </script>
 </body></html>
