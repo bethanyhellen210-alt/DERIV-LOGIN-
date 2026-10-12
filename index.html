@@ -47,11 +47,72 @@ $('startStop').onclick=()=>running?stopAnalysis():startAnalysis();
 function stopAnalysis(){running=false;clearInterval(expiryInterval);expiryInterval=null;if(socket){try{socket.onclose=null;socket.close()}catch{}socket=null;}$('startStop').textContent='▶ START ANALYSIS';setConnection('Disconnected');resetSignal('ANALYSIS STOPPED','Press Start Analysis to reconnect.');}
 async function startAnalysis(){const id=$('appIdSettings').value.trim(),symbol=$('market').value;if(!/^\d+$/.test(id)){setConnection('Enter a valid Deriv App ID');return;}if(!symbol){setConnection('Choose a market');return;}stopAnalysis();running=true;$('startStop').textContent='■ STOP ANALYSIS';ticks=[];signalSignature='';resetSignal('CONNECTING…','Opening live Deriv tick stream.');setConnection('Connecting…');try{socket=new WebSocket('wss://ws.derivws.com/websockets/v3?app_id='+encodeURIComponent(id));socket.onopen=()=>{if(!running)return;setConnection('Connected · waiting for ticks');socket.send(JSON.stringify({ticks:symbol,subscribe:1}));};socket.onmessage=ev=>{const m=JSON.parse(ev.data);if(m.error){setConnection(m.error.message);resetSignal('CONNECTION ERROR',m.error.message);return;}if(m.msg_type==='tick'&&m.tick){const q=m.tick.quote,precision=Number(m.tick.pip_size??2),str=Number(q).toFixed(Math.max(0,Math.min(8,precision))),digit=Number(str.slice(-1));ticks.push({digit,epoch:m.tick.epoch});if(ticks.length>1000)ticks.shift();lastTickEpoch=m.tick.epoch;$('lastDigit').textContent=digit;setConnection('Live · '+(marketNames[symbol]||symbol));renderFrequency();analyse();}};socket.onerror=()=>{setConnection('WebSocket error');};socket.onclose=()=>{if(running){setConnection('Disconnected · press Start to reconnect');running=false;$('startStop').textContent='▶ START ANALYSIS';}};}catch(err){setConnection(err.message);running=false;$('startStop').textContent='▶ START ANALYSIS';}}
 function renderFrequency(){const n=Math.min(ticks.length,Number($('window').value)),sample=ticks.slice(-n),counts=Array(10).fill(0);sample.forEach(x=>counts[x.digit]++);$('tickCount').textContent=sample.length+' ticks collected';$('frequencies').innerHTML='';counts.forEach((c,d)=>{const pct=sample.length?c/sample.length*100:0;const el=document.createElement('div');el.className='freq';el.innerHTML='<span>Digit '+d+'</span><strong>'+pct.toFixed(1)+'%</strong><div class="bar"><i style="width:'+Math.min(100,pct*10)+'%"></i></div>';$('frequencies').append(el);});}
-function analyse(){const n=Math.min(ticks.length,Number($('window').value));if(n<30){resetSignal('COLLECTING TICKS','Need at least 30 ticks before analysis. '+n+' collected.');return;}const sample=ticks.slice(-n),counts=Array(10).fill(0);sample.forEach(x=>counts[x.digit]++);const pct=counts.map(c=>c/n*100),type=$('contract').value,b=Number($('barrier').value),threshold=Number($('threshold').value);let title='WAIT',reason='No setup confirmed. Continue analysing.',confidence=null,qualified=false,signature='';
-if(type==='over'||type==='under'){const eligible=Array.from({length:10},(_,d)=>d).filter(d=>type==='over'?d>b:d<b);const low=eligible.filter(d=>pct[d]<threshold);const last=ticks[ticks.length-1].digit;const selected=low.includes(last);if(low.length&&selected){qualified=true;title='BUY '+type.toUpperCase()+' '+b;reason='Last digit '+last+' is in the selected range and its measured frequency is '+pct[last].toFixed(1)+'%, below '+threshold+'%.';confidence=Math.min(85,50+(threshold-pct[last])*3+Math.min(10,(low.length-1)*2));signature=title+':'+last;}else if(!low.length){reason='No eligible digit is below '+threshold+'%. No signal.';}else{reason='Low-frequency eligible digit(s): '+low.join(', ')+'. Waiting for one of those digits to appear on a live tick.';}}
-else if(type==='differ'||type==='matches'){const target=b,last=ticks[ticks.length-1].digit,rate=pct[target];if(type==='differ'&&rate<threshold&&last!==target){qualified=true;title='BUY DIFFERS '+target;reason='Target digit '+target+' frequency is '+rate.toFixed(1)+'%, below '+threshold+'%, and the latest digit differs.';confidence=Math.min(82,50+(threshold-rate)*3);}else if(type==='matches'&&rate<threshold&&last===target){qualified=true;title='BUY MATCHES '+target;reason='Target digit '+target+' is currently low-frequency ('+rate.toFixed(1)+'%) and has just appeared. This is a rare-event setup, not a prediction guarantee.';confidence=Math.min(80,45+(threshold-rate)*3);}else{reason='Target digit '+target+' frequency is '+rate.toFixed(1)+'%. Waiting for the selected target condition.';}}
-else{const even=[0,2,4,6,8].reduce((a,d)=>a+counts[d],0)/n*100,odd=100-even,short=ticks.slice(-Math.min(20,ticks.length));const se=short.filter(x=>x.digit%2===0).length/short.length*100;const chosen=type==='even'?'EVEN':'ODD',rate=type==='even'?even:odd,opposite=type==='even'?odd:even,shortRate=type==='even'?se:100-se;const edge=rate-opposite,stable=Math.abs(shortRate-rate)<15;if(Math.abs(edge)>=6&&stable){qualified=true;title='BUY '+chosen;reason=chosen+' frequency '+rate.toFixed(1)+'% vs '+(type==='even'?'ODD':'EVEN')+' '+opposite.toFixed(1)+'%; short-window reading '+shortRate.toFixed(1)+'%. Frequency edge only; predictive value is unproven.';confidence=Math.min(65,50+Math.abs(edge)*1.2);}else{reason='EVEN '+even.toFixed(1)+'% · ODD '+odd.toFixed(1)+'%. No stable frequency edge; WAIT.';}}
-if(qualified){const sig=signature||title;if(sig!==signalSignature){signalSignature=sig;signalUntil=Date.now()+30000;}title=title; $('signalText').textContent=title;$('signalReason').textContent=reason;$('confidence').textContent=Math.round(confidence)+'%';$('countdown').textContent=Math.max(0,Math.ceil((signalUntil-Date.now())/1000))+'s';}else{signalSignature='';signalUntil=0;$('signalText').textContent=title;$('signalReason').textContent=reason;$('confidence').textContent='—';$('countdown').textContent='—';}}
+function analyse(){
+ const n=Math.min(ticks.length,Number($('window').value));
+ if(n<30){resetSignal('COLLECTING TICKS','Need at least 30 live ticks before analysis. '+n+' collected.');return;}
+ const sample=ticks.slice(-n),counts=Array(10).fill(0);
+ sample.forEach(x=>counts[x.digit]++);
+ const pct=counts.map(c=>c/n*100),type=$('contract').value,b=Number($('barrier').value),threshold=Number($('threshold').value);
+ const last=ticks[ticks.length-1].digit,previous=ticks[ticks.length-2]?.digit;
+ let title='WAIT',reason='No setup confirmed. Continue analysing.',confidence=null,qualified=false,signature='';
+ const recent=ticks.slice(-Math.min(20,ticks.length));
+ if(type==='over'||type==='under'){
+   // Mirror the requested setup: for OVER b, an under-barrier digit must first be below
+   // the frequency threshold, then a high-frequency digit above b triggers OVER b.
+   // For UNDER b, reverse the sides.
+   const setupDigits=Array.from({length:10},(_,d)=>d).filter(d=>
+     (type==='over'?d<b:d>b) && pct[d]<threshold);
+   const entrySide=type==='over'?last>b:last<b;
+   const entryFrequencyHigh=pct[last]>=threshold;
+   const previousWasSetup=previous!==undefined && setupDigits.includes(previous);
+   const setupRecent=recent.slice(0,-1).some(x=>setupDigits.includes(x.digit));
+   if(setupDigits.length && entrySide && entryFrequencyHigh && previousWasSetup){
+     qualified=true;title='BUY '+type.toUpperCase()+' '+b;
+     reason='Sequence confirmed: low-frequency setup digit '+previous+' ('+pct[previous].toFixed(1)+'%) was followed by digit '+last+' on the '+(type==='over'?'above-barrier':'below-barrier')+' side ('+pct[last].toFixed(1)+'%). Setup threshold: '+threshold+'%.';
+     confidence=Math.min(75,50+Math.min(15,Math.max(0,threshold-pct[previous])*2)+Math.min(10,Math.max(0,pct[last]-threshold)));
+     signature=title+':'+previous+'>'+last+':'+ticks[ticks.length-1].epoch;
+   }else if(!setupDigits.length){
+     reason='No digit on the '+(type==='over'?'under-barrier':'over-barrier')+' side is below '+threshold+'%. WAIT.';
+   }else{
+     reason='Setup digits below '+threshold+'%: '+setupDigits.join(', ')+'. '+(setupRecent?'Recent setup observed; waiting for a qualifying '+(type==='over'?'digit above '+b:'digit below '+b)+' with frequency at or above '+threshold+'%.':'Waiting for a low-frequency '+(type==='over'?'digit below '+b:'digit above '+b)+' followed by a qualifying entry digit.');
+   }
+ }else if(type==='differ'||type==='matches'){
+   const target=b,rate=pct[target];
+   if(type==='differ'&&rate<threshold&&last===target){
+     qualified=true;title='BUY DIFFERS '+target;
+     reason='Prediction digit '+target+' has low observed frequency ('+rate.toFixed(1)+'%, below '+threshold+'%) and just appeared. Differs wins only if the next contract result is not '+target+'.';
+     confidence=Math.min(75,50+Math.max(0,threshold-rate)*2);
+     signature=title+':'+ticks[ticks.length-1].epoch;
+   }else if(type==='matches'&&rate<threshold&&last===target){
+     qualified=true;title='BUY MATCHES '+target;
+     reason='Prediction digit '+target+' has low observed frequency ('+rate.toFixed(1)+'%, below '+threshold+'%) and just appeared. Matches wins only if the next contract result is '+target+'.';
+     confidence=Math.min(70,45+Math.max(0,threshold-rate)*2);
+     signature=title+':'+ticks[ticks.length-1].epoch;
+   }else{
+     reason='Target digit '+target+' frequency is '+rate.toFixed(1)+'%. '+(rate<threshold?'Waiting for digit '+target+' to appear on a live tick.':'Target frequency is not below '+threshold+'%; WAIT.');
+   }
+ }else{
+   const even=[0,2,4,6,8].reduce((a,d)=>a+counts[d],0)/n*100,odd=100-even;
+   const short=recent,shortEven=short.filter(x=>x.digit%2===0).length/short.length*100;
+   const chosen=type==='even'?'EVEN':'ODD',rate=type==='even'?even:odd,opposite=type==='even'?odd:even,shortRate=type==='even'?shortEven:100-shortEven;
+   const edge=rate-opposite,stable=Math.abs(shortRate-rate)<15;
+   if(Math.abs(edge)>=6&&stable){
+     qualified=true;title='BUY '+chosen;
+     reason=chosen+' is '+rate.toFixed(1)+'% of the selected window versus '+(type==='even'?'ODD':'EVEN')+' at '+opposite.toFixed(1)+'%; recent-window reading '+shortRate.toFixed(1)+'%. Historical frequency is descriptive, not predictive.';
+     confidence=Math.min(65,50+Math.abs(edge)*1.2);signature=title+':'+Math.round(rate)+':'+ticks[ticks.length-1].epoch;
+   }else{
+     reason='EVEN '+even.toFixed(1)+'% · ODD '+odd.toFixed(1)+'%. No stable frequency edge; WAIT.';
+   }
+ }
+ if(qualified){
+   if(signalSignature!==signature){signalSignature=signature;signalUntil=Date.now()+30000;}
+   $('signalText').textContent=title;$('signalReason').textContent=reason;
+   $('confidence').textContent=Math.round(confidence)+'%';$('countdown').textContent=Math.max(0,Math.ceil((signalUntil-Date.now())/1000))+'s';
+ }else{
+   signalSignature='';signalUntil=0;$('signalText').textContent=title;$('signalReason').textContent=reason;
+   $('confidence').textContent='—';$('countdown').textContent='—';
+ }
+}
 expiryInterval=setInterval(()=>{if(signalUntil&&Date.now()>=signalUntil){signalUntil=0;signalSignature='';$('signalText').textContent='SIGNAL EXPIRED';$('signalReason').textContent='The 30-second signal window has expired. Wait for a new setup.';$('confidence').textContent='—';$('countdown').textContent='0s';}else if(signalUntil){$('countdown').textContent=Math.max(0,Math.ceil((signalUntil-Date.now())/1000))+'s';}},250);
 $('contract').onchange=()=>{signalSignature='';resetSignal('WAITING FOR SETUP','Strategy changed. Continue analysing live ticks.');};
 $('window').onchange=()=>{renderFrequency();if(ticks.length)analyse();};
