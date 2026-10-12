@@ -185,11 +185,16 @@ async function startAnalysis(){
    clearTickTimers();
    if(!running)return;
    setConnection('Disconnected · reconnecting automatically…');
+   const previewTitle=document.querySelector('.preview .signal h2');
+   const previewStatus=document.querySelector('.preview .signal .muted');
+   if(previewTitle)previewTitle.textContent='RECONNECTING TO DERIV…';
+   if(previewStatus)previewStatus.textContent='Live feed interrupted. Retrying automatically.';
    resetSignal('RECONNECTING…','The live feed disconnected. Reconnecting automatically.');
    const delay=Math.min(15000,1000*Math.pow(2,Math.min(reconnectAttempt++,4)));
    tickReconnectTimer=setTimeout(()=>{
     tickReconnectTimer=null;
-    if(running&&!$('app').classList.contains('hidden'))startAnalysis();
+    // Public tick data must reconnect on the landing page as well as the dashboard.
+    if(running&&!socket)startAnalysis();
    },delay);
   };
  }catch(err){
@@ -197,7 +202,12 @@ async function startAnalysis(){
   setConnection('Could not open Deriv feed · retrying');
   resetSignal('CONNECTION FAILED',err&&err.message?err.message:'Could not open a WebSocket connection.');
   const delay=Math.min(15000,1000*Math.pow(2,Math.min(reconnectAttempt++,4)));
-  tickReconnectTimer=setTimeout(()=>{tickReconnectTimer=null;if(!running&&!$('app').classList.contains('hidden'))startAnalysis();},delay);
+  running=true;
+  tickReconnectTimer=setTimeout(()=>{
+   tickReconnectTimer=null;
+   // Keep retrying even if the visitor has not signed in yet.
+   if(running&&!socket)startAnalysis();
+  },delay);
  }
 }
 function renderFrequency(){const n=Math.min(ticks.length,Number($('window').value)),sample=ticks.slice(-n),counts=Array(10).fill(0);sample.forEach(x=>counts[x.digit]++);$('tickCount').textContent=sample.length+' ticks collected';$('frequencies').innerHTML='';counts.forEach((c,d)=>{const pct=sample.length?c/sample.length*100:0;const el=document.createElement('div');el.className='freq';el.innerHTML='<span>Digit '+d+'</span><strong>'+pct.toFixed(1)+'%</strong><div class="bar"><i style="width:'+Math.min(100,pct*10)+'%"></i></div>';$('frequencies').append(el);});}
