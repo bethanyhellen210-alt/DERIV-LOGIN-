@@ -243,10 +243,17 @@ setInterval(()=>{if(signalUntil&&Date.now()>=signalUntil){signalUntil=0;signalSi
 function updateContractFields(){
   const type=$('contract').value;
   const isOverUnder=type==='over'||type==='under';
-  $('thresholdField').classList.toggle('hidden',!isOverUnder);
-  // Over/Under need a barrier and threshold. Matches/Differs choose a target digit automatically.
-  $('barrierField').classList.toggle('hidden',!isOverUnder);
-  $('barrierLabel').textContent='BARRIER';
+  const thresholdField=$('thresholdField');
+  const barrierField=$('barrierField');
+  // Explicitly show both settings for BOTH Over and Under, and hide them for other contracts.
+  thresholdField.classList.toggle('hidden',!isOverUnder);
+  thresholdField.style.display=isOverUnder?'grid':'none';
+  thresholdField.setAttribute('aria-hidden',String(!isOverUnder));
+  barrierField.classList.toggle('hidden',!isOverUnder);
+  barrierField.style.display=isOverUnder?'grid':'none';
+  barrierField.setAttribute('aria-hidden',String(!isOverUnder));
+  $('barrierLabel').textContent='BARRIER / TARGET DIGIT';
+  thresholdField.querySelector('label').textContent='LOW DIGIT THRESHOLD';
 }
 $('contract').onchange=()=>{updateContractFields();signalSignature='';resetSignal('WAITING FOR SETUP','Strategy changed. Continue analysing live ticks.');};
 updateContractFields();
