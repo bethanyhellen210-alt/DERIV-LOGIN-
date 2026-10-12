@@ -57,8 +57,8 @@ $('logout').onclick=()=>{
 // Try the documented public WebSocket endpoint first, then legacy host variants.
 const DERIV_APP_ID='1089';
 const DERIV_WS_URLS=[
- // Official public market-data endpoint: no authentication or App ID required.
- 'wss://ws.binaryws.com/websockets/v3',
+ // Use Deriv's current WebSocket host with an application ID first.
+ // The documented public app ID is sufficient for read-only market data.
  'wss://ws.derivws.com/websockets/v3?app_id='+DERIV_APP_ID,
  'wss://ws.binaryws.com/websockets/v3?app_id='+DERIV_APP_ID
 ];
@@ -118,7 +118,7 @@ function loadMarkets(){
     try{if(timer)clearTimeout(timer);ws&&ws.close();}catch{}
    }
   }
-  setConnection('Deriv unavailable · retrying automatically');
+  setConnection('Deriv unavailable · retrying automatically ('+(lastError&&lastError.message?lastError.message:'WebSocket failed')+')');
   scheduleMarketRetry();
   throw lastError||Error('Could not connect to Deriv');
  })().finally(()=>{marketLoading=false;marketLoadPromise=null;});
