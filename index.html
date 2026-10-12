@@ -51,7 +51,10 @@ function analyse(){
  if(n<30){resetSignal('COLLECTING TICKS','Need at least 30 live ticks before analysis. '+n+' collected.');return;}
  const sample=ticks.slice(-n),counts=Array(10).fill(0);
  sample.forEach(x=>counts[x.digit]++);
- const pct=counts.map(c=>c/n*100),type=$('contract').value,b=Number($('barrier').value),threshold=Number($('threshold').value);
+ const pct=counts.map(c=>c/n*100),type=$('contract').value,threshold=Number($('threshold').value);
+  // Matches/Differs choose the least-seen digit automatically; no target setting is shown.
+  const predictedDigit=counts.indexOf(Math.min(...counts));
+  const b=(type==='matches'||type==='differ')?predictedDigit:Number($('barrier').value);
  const last=ticks[ticks.length-1].digit,previous=ticks[ticks.length-2]?.digit;
  let title='WAIT',reason='No setup confirmed. Continue analysing.',confidence=null,qualified=false,signature='';
  const recent=ticks.slice(-Math.min(20,ticks.length));
@@ -76,7 +79,7 @@ function analyse(){
      reason='Setup digits below '+threshold+'%: '+setupDigits.join(', ')+'. '+(setupRecent?'Recent setup observed; waiting for a qualifying '+(type==='over'?'digit above '+b:'digit below '+b)+' with frequency at or above '+threshold+'%.':'Waiting for a low-frequency '+(type==='over'?'digit below '+b:'digit above '+b)+' followed by a qualifying entry digit.');
    }
  }else if(type==='differ'||type==='matches'){
-   const target=b,rate=pct[target];
+   const target=predictedDigit,rate=pct[target];
    if(type==='differ'&&rate<threshold&&last===target){
      qualified=true;title='BUY DIFFERS '+target;
      reason='AUTO-PREDICTED DIGIT '+target+' · observed frequency '+rate.toFixed(1)+'%. It just appeared. Differs wins if the next result is not '+target+'.';
